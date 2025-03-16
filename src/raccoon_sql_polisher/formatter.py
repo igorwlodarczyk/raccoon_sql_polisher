@@ -10,7 +10,9 @@ from raccoon_sql_polisher.parser.PostgreSQLParserListener import (
 
 
 class Formatter(PostgreSQLParserListener):
-    def __init__(self, output_file: Path, number_of_newlines_after_stmt: int = 2, *args, **kwargs):
+    def __init__(
+        self, output_file: Path, number_of_newlines_after_stmt: int = 2, *args, **kwargs
+    ):
         super().__init__(*args, **kwargs)
         self.formatted_code = ""
         self.__number_of_newlines_after_stmt = number_of_newlines_after_stmt
@@ -52,7 +54,9 @@ class Formatter(PostgreSQLParserListener):
         ]
         with open(self.output_file, "w") as output:
             output.write(self.formatted_code)
-        print(f"{Style.BRIGHT}{Fore.LIGHTWHITE_EX}raccoonified {self.output_file.name} 🦝🦝🦝{Style.RESET_ALL}")
+        print(
+            f"{Style.BRIGHT}{Fore.LIGHTWHITE_EX}raccoonified {self.output_file.name} 🦝🦝🦝{Style.RESET_ALL}"
+        )
 
     def enterTarget_list(self, ctx: PostgreSQLParser.Target_listContext):
         columns = [
@@ -98,9 +102,11 @@ class Formatter(PostgreSQLParserListener):
 
 def __create_parser():
     parser = argparse.ArgumentParser(
-        description=("Raccoon SQL Polisher: " 
-                     "A formatter for PostgreSQL SQL queries that " 
-                     "enhances readability and enforces a consistent coding style.")
+        description=(
+            "Raccoon SQL Polisher: "
+            "A formatter for PostgreSQL SQL queries that "
+            "enhances readability and enforces a consistent coding style."
+        )
     )
     parser.add_argument(
         "path",
@@ -121,6 +127,7 @@ def __get_sql_files_to_format(path: str):
             f"Path '{path}' does not exist or is not a valid file/directory. 💀"
         )
 
+
 def format_sql_file(sql_file_path: Path):
     with open(sql_file_path, "r") as file:
         file_content = file.read()
@@ -136,6 +143,7 @@ def format_sql_file(sql_file_path: Path):
     walker = ParseTreeWalker()
     walker.walk(listener, tree)
 
+
 def main():
     parser = __create_parser()
     args = parser.parse_args()
@@ -143,4 +151,3 @@ def main():
     sql_files = __get_sql_files_to_format(args.path)
     for file in sql_files:
         format_sql_file(file)
-
