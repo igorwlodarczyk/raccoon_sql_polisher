@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "raccoon_sql_polisher"
+authors = [
+    {name = "Igor Wlodarczyk", email = "wlodar.igor@gmail.com"},
+]
+description = "Raccoon SQL Polisher: A formatter for PostgreSQL SQL queries that enhances readability and enforces a consistent coding style."
+readme = "README.md"
+requires-python = ">=3.10"
+keywords = ["PostgreSQL", "formatter"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "colorama",
+    "antlr4-python3-runtime",
+]
+version = "1.0.0"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["raccoon_sql_polisher"]
+
+[project.scripts]
+sqlraccoon = "raccoon_sql_polisher.formatter:main"
