@@ -1,4 +1,6 @@
 import argparse
+import random
+from enum import Enum
 from pathlib import Path
 from antlr4 import *
 from colorama import init, Fore, Style
@@ -9,19 +11,29 @@ from raccoon_sql_polisher.parser.PostgreSQLParserListener import (
 )
 
 
+class NodeType(Enum):
+    KEYWORD = "Keyword"
+    REGULAR = "Regular"
+    DOT = "Dot"
+    COMMA = "Comma"
+    LEFT_PARENTHESIS = "Left parenthesis"
+    RIGHT_PARENTHESIS = "Right parenthesis"
+    STRING = "String"
+
+
 class Formatter(PostgreSQLParserListener):
     def __init__(
-        self, output_file: Path, number_of_newlines_after_stmt: int = 2, *args, **kwargs
+        self,
+        number_of_newlines_after_stmt: int = 2,
+        ugly: bool = False,
+        *args,
+        **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.formatted_code = ""
         self.__number_of_newlines_after_stmt = number_of_newlines_after_stmt
-        self.output_file = output_file
-
-    # Dev tools
-    @staticmethod
-    def print_tree(ctx):
-        print(ctx.toStringTree(recog=PostgreSQLParser))
+        self.prev_node_type = None
+        self.ugly = ugly
 
     def get_leaf_nodes(self, ctx):
         if ctx.getChildCount() == 0:
@@ -31,73 +43,108 @@ class Formatter(PostgreSQLParserListener):
             leaves.extend(self.get_leaf_nodes(ctx.getChild(i)))
         return leaves
 
-    # General
     @staticmethod
-    def check_context(ctx, expected_context):
-        parent_context = ctx.parentCtx
-        is_in_where_clause = False
+    def determine_node_type(node):
+        node_type = NodeType.REGULAR
+        keywords = [
+            PostgreSQLParser.Having_clauseContext,
+            PostgreSQLParser.Target_labelContext,
+            PostgreSQLParser.Join_typeContext,
+            PostgreSQLParser.Table_refContext,
+            PostgreSQLParser.Join_qualContext,
+            PostgreSQLParser.Group_clauseContext,
+            PostgreSQLParser.Group_clauseContext,
+            PostgreSQLParser.Using_clauseContext,
+            PostgreSQLParser.Where_or_current_clauseContext,
+            PostgreSQLParser.A_expr_andContext,
+            PostgreSQLParser.DeletestmtContext,
+            PostgreSQLParser.SelectstmtContext,
+            PostgreSQLParser.InsertstmtContext,
+            PostgreSQLParser.UpdatestmtContext,
+            PostgreSQLParser.Where_clauseContext,
+            PostgreSQLParser.Simple_select_pramaryContext,
+            PostgreSQLParser.From_clauseContext,
+        ]
+        node_parent = node.parentCtx
+        if any(isinstance(node_parent, keyword) for keyword in keywords):
+            node_type = NodeType.KEYWORD
+        elif node.getText().startswith("'") and node.getText().endswith("'"):
+            node_type = NodeType.STRING
+        elif node.getText().lower() in ["avg", "count"]:
+            node_type = NodeType.KEYWORD
+        elif isinstance(node_parent, PostgreSQLParser.Func_applicationContext):
+            if node.getText() == "(":
+                node_type = NodeType.LEFT_PARENTHESIS
+            else:
+                node_type = NodeType.RIGHT_PARENTHESIS
+        elif node.getText() == ".":
+            node_type = NodeType.DOT
+        elif node.getText() == ",":
+            node_type = NodeType.COMMA
+        return node_type
 
-        while parent_context is not None:
-            if isinstance(parent_context, expected_context):
-                is_in_where_clause = True
-                break
-            parent_context = parent_context.parentCtx
-        return is_in_where_clause
+    @staticmethod
+    def random_case(text: str) -> str:
+        return "".join(
+            char.upper() if random.choice([True, False]) else char.lower()
+            for char in text
+        )
+
+    def format_node(self, node) -> str:
+        node_type = self.determine_node_type(node)
+        node_text = node.getText()
+        formatted_node_text = node_text
+        if node_type is NodeType.KEYWORD:
+            if self.prev_node_type is None:
+                formatted_node_text = node_text.upper()
+            elif self.prev_node_type is NodeType.REGULAR:
+                formatted_node_text = "\n" + node_text.upper()
+            else:
+                formatted_node_text = " " + node_text.upper()
+        elif node_type is NodeType.COMMA:
+            formatted_node_text = node_text
+        elif node_type is NodeType.DOT:
+            formatted_node_text = node_text
+        elif node_type is NodeType.LEFT_PARENTHESIS:
+            if self.prev_node_type is NodeType.KEYWORD:
+                formatted_node_text = node_text
+            else:
+                formatted_node_text = " " + node_text
+        elif node_type is NodeType.RIGHT_PARENTHESIS:
+            formatted_node_text = node_text
+        elif node_type is NodeType.STRING:
+            formatted_node_text = " " + node_text
+        elif node_type is NodeType.REGULAR:
+            if (
+                self.prev_node_type is NodeType.DOT
+                or self.prev_node_type is NodeType.LEFT_PARENTHESIS
+            ):
+                formatted_node_text = node_text.lower()
+            else:
+                formatted_node_text = " " + node_text.lower()
+
+        if self.ugly and node_type is not NodeType.STRING:
+            formatted_node_text = self.random_case(formatted_node_text)
+        self.prev_node_type = node_type
+        return formatted_node_text
+
+    def enterStmt(self, ctx: PostgreSQLParser.StmtContext):
+        leaves = self.get_leaf_nodes(ctx)
+        for leaf in leaves:
+            self.formatted_code += self.format_node(leaf)
 
     def exitStmt(self, ctx: PostgreSQLParser.StmtContext):
         self.formatted_code += ";"
         self.formatted_code += "\n" * self.__number_of_newlines_after_stmt
+        self.prev_node_type = None
 
     def exitRoot(self, ctx: PostgreSQLParser.RootContext):
         self.formatted_code = self.formatted_code[
             : -self.__number_of_newlines_after_stmt + 1
         ]
-        with open(self.output_file, "w") as output:
-            output.write(self.formatted_code)
-        print(
-            f"{Style.BRIGHT}{Fore.LIGHTWHITE_EX}raccoonified {self.output_file.name} 🦝🦝🦝{Style.RESET_ALL}"
-        )
 
-    def enterTarget_list(self, ctx: PostgreSQLParser.Target_listContext):
-        columns = [
-            child.getText().lower()
-            for child in ctx.getChildren()
-            if child.getText() != ","
-        ]
-
-        self.formatted_code += " " + ", ".join(columns)
-
-    def enterSimple_select_pramary(
-        self, ctx: PostgreSQLParser.Simple_select_pramaryContext
-    ):
-        self.formatted_code += ctx.getChild(0).getText().upper()
-
-    def enterSelectstmt(self, ctx: PostgreSQLParser.SelectstmtContext):
-        # print(ctx.toStringTree(recog=PostgreSQLParser))
-        ...
-
-    def enterFrom_clause(self, ctx: PostgreSQLParser.From_clauseContext):
-        self.formatted_code += "\n" + ctx.getChild(0).getText().upper()
-
-    def enterTable_ref(self, ctx: PostgreSQLParser.Table_refContext):
-        self.formatted_code += f" {ctx.getText()}"
-
-    def enterWhere_clause(self, ctx: PostgreSQLParser.Where_clauseContext):
-        self.formatted_code += "\n" + ctx.getChild(0).getText().upper()
-
-    def enterA_expr_and(self, ctx: PostgreSQLParser.A_expr_andContext):
-        expected_context = PostgreSQLParser.Where_clauseContext
-        is_in_where_clause = self.check_context(ctx, expected_context)
-
-        if is_in_where_clause:
-            nodes = self.get_leaf_nodes(ctx)
-            for node in nodes:
-                node_text = node.getText()
-                if node_text in ("OR", "AND", "NOT"):
-                    node_text = node_text.upper()
-                else:
-                    node_text = node_text.lower()
-                self.formatted_code += " " + node_text
+    def get_formatted_code(self):
+        return self.formatted_code
 
 
 def __create_parser():
@@ -111,6 +158,15 @@ def __create_parser():
     parser.add_argument(
         "path",
         help="Path to the file or directory containing the SQL code to be formatted.",
+    )
+    parser.add_argument(
+        "--ugly",
+        help=(
+            "Randomly changes the case of letters (upper/lower) in the formatted SQL code. "
+            "If set, this option enables the effect. "
+            "(action='store_true')"
+        ),
+        action="store_true",
     )
     return parser
 
@@ -128,7 +184,7 @@ def __get_sql_files_to_format(path: str):
         )
 
 
-def format_sql_file(sql_file_path: Path):
+def format_sql_file(sql_file_path: Path, ugly: bool = False):
     with open(sql_file_path, "r") as file:
         file_content = file.read()
     input_stream = InputStream(file_content)
@@ -138,16 +194,23 @@ def format_sql_file(sql_file_path: Path):
 
     tree = parser.root()
 
-    listener = Formatter(sql_file_path)
+    listener = Formatter(ugly=ugly)
 
     walker = ParseTreeWalker()
     walker.walk(listener, tree)
+    formatted_code = listener.get_formatted_code()
+    with open(sql_file_path, "w") as output:
+        output.write(formatted_code)
+    print(
+        f"{Style.BRIGHT}{Fore.LIGHTWHITE_EX}raccoonified {sql_file_path.name} 🦝🦝🦝{Style.RESET_ALL}"
+    )
 
 
 def main():
+    init()
     parser = __create_parser()
     args = parser.parse_args()
 
     sql_files = __get_sql_files_to_format(args.path)
     for file in sql_files:
-        format_sql_file(file)
+        format_sql_file(file, args.ugly)
