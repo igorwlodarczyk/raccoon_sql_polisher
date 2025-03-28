@@ -36,6 +36,8 @@ class Formatter(PostgreSQLParserListener):
         self.prev_node_type = None
         self.ugly = ugly
         self.indent_after_keyword = indent_after_keyword
+        self.create_table_stmt = False
+        self.column_constraints = False
 
     def get_leaf_nodes(self, ctx):
         if ctx.getChildCount() == 0:
@@ -77,14 +79,16 @@ class Formatter(PostgreSQLParserListener):
             PostgreSQLParser.Values_clauseContext,
         ]
         node_parent = node.parentCtx
-        if isinstance(node_parent, PostgreSQLParser.Func_applicationContext) or node.getText() in ("(", ")"):
+        if isinstance(
+            node_parent, PostgreSQLParser.Func_applicationContext
+        ) or node.getText() in ("(", ")"):
             if node.getText() == "(":
                 node_type = NodeType.LEFT_PARENTHESIS
             else:
                 node_type = NodeType.RIGHT_PARENTHESIS
         elif node.getText().startswith("'") and node.getText().endswith("'"):
             node_type = NodeType.STRING
-        elif node.getText().lower() in ["avg", "count"]:
+        elif node.getText().lower() in ["avg", "count", "nosw"]:
             node_type = NodeType.KEYWORD
         elif node.getText() == ".":
             node_type = NodeType.DOT
@@ -105,44 +109,77 @@ class Formatter(PostgreSQLParserListener):
         node_type = self.determine_node_type(node)
         node_text = node.getText()
         formatted_node_text = node_text
-        if node_text.strip() == '':
-            return ''
+        if node_text.strip() == "":
+            return ""
 
-        if node_type is NodeType.KEYWORD:
-            if node_text.upper() == "VALUES":
-                formatted_node_text = "\n" + node_text.upper() + " "
-            elif self.prev_node_type is None:
-                formatted_node_text = node_text.upper()
-            elif self.prev_node_type is NodeType.REGULAR or self.prev_node_type is NodeType.STRING:
-                formatted_node_text = "\n" + node_text.upper()
-            else:
+        if not self.column_constraints:
+            if node_type is NodeType.KEYWORD:
+                if node_text.upper() == "VALUES":
+                    formatted_node_text = "\n" + node_text.upper() + " "
+                elif self.prev_node_type is None:
+                    formatted_node_text = node_text.upper()
+                elif (
+                    self.prev_node_type is NodeType.REGULAR
+                    or self.prev_node_type is NodeType.STRING
+                ):
+                    formatted_node_text = "\n" + node_text.upper()
+                else:
+                    formatted_node_text = " " + node_text.upper()
+            elif node_type is NodeType.COMMA:
+                formatted_node_text = node_text
+            elif node_type is NodeType.DOT:
+                formatted_node_text = node_text
+            elif node_type is NodeType.LEFT_PARENTHESIS:
+                if self.create_table_stmt:
+                    self.column_constraints = True
+                    formatted_node_text = " " + node_text + "\n"
+                elif self.prev_node_type is NodeType.KEYWORD:
+                    formatted_node_text = node_text
+                else:
+                    formatted_node_text = " " + node_text
+            elif node_type is NodeType.RIGHT_PARENTHESIS:
+                formatted_node_text = node_text
+            elif node_type is NodeType.STRING:
+                if self.prev_node_type is NodeType.LEFT_PARENTHESIS:
+                    formatted_node_text = node_text
+                else:
+                    formatted_node_text = " " + node_text
+            elif node_type is NodeType.REGULAR:
+                if (
+                    self.prev_node_type is NodeType.DOT
+                    or self.prev_node_type is NodeType.LEFT_PARENTHESIS
+                ):
+                    formatted_node_text = node_text.lower()
+                elif (
+                    self.indent_after_keyword
+                    and self.prev_node_type is NodeType.KEYWORD
+                ):
+                    formatted_node_text = "\n\t" + node_text.lower()
+                else:
+                    formatted_node_text = " " + node_text.lower()
+        else:
+            if node_type is NodeType.REGULAR:
+                if self.prev_node_type is NodeType.LEFT_PARENTHESIS:
+                    formatted_node_text = node_text.lower()
+                elif self.prev_node_type is NodeType.REGULAR:
+                    formatted_node_text = " " + node_text.lower()
+                elif self.prev_node_type is NodeType.COMMA:
+                    formatted_node_text = "\n" + node_text.lower()
+                elif self.prev_node_type is NodeType.KEYWORD:
+                    formatted_node_text = " " + node_text.lower()
+                else:
+                    formatted_node_text = node_text.lower()
+
+            elif node_type is NodeType.KEYWORD:
                 formatted_node_text = " " + node_text.upper()
-        elif node_type is NodeType.COMMA:
-            formatted_node_text = node_text
-        elif node_type is NodeType.DOT:
-            formatted_node_text = node_text
-        elif node_type is NodeType.LEFT_PARENTHESIS:
-            if self.prev_node_type is NodeType.KEYWORD:
+            elif node_type is NodeType.LEFT_PARENTHESIS:
                 formatted_node_text = node_text
-            else:
-                formatted_node_text = " " + node_text
-        elif node_type is NodeType.RIGHT_PARENTHESIS:
-            formatted_node_text = node_text
-        elif node_type is NodeType.STRING:
-            if self.prev_node_type is NodeType.LEFT_PARENTHESIS:
+            elif node_type is NodeType.RIGHT_PARENTHESIS:
                 formatted_node_text = node_text
-            else:
+            elif node_type is NodeType.STRING:
                 formatted_node_text = " " + node_text
-        elif node_type is NodeType.REGULAR:
-            if (
-                self.prev_node_type is NodeType.DOT
-                or self.prev_node_type is NodeType.LEFT_PARENTHESIS
-            ):
-                formatted_node_text = node_text.lower()
-            elif self.indent_after_keyword and self.prev_node_type is NodeType.KEYWORD:
-                formatted_node_text = "\n\t"+ node_text.lower()
-            else:
-                formatted_node_text = " " + node_text.lower()
+            elif node_type is NodeType.COMMA:
+                formatted_node_text = node_text
 
         if self.ugly and node_type is not NodeType.STRING:
             formatted_node_text = self.random_case(formatted_node_text)
@@ -151,13 +188,21 @@ class Formatter(PostgreSQLParserListener):
 
     def enterStmt(self, ctx: PostgreSQLParser.StmtContext):
         leaves = self.get_leaf_nodes(ctx)
+        if "CREATE" in leaves[0].getText().upper():
+            self.create_table_stmt = True
         for leaf in leaves:
             self.formatted_code += self.format_node(leaf)
 
     def exitStmt(self, ctx: PostgreSQLParser.StmtContext):
         self.formatted_code += ";"
+        if self.create_table_stmt:
+            self.formatted_code = (
+                self.formatted_code[:-2] + "\n" + self.formatted_code[-2:]
+            )
         self.formatted_code += "\n" * self.__number_of_newlines_after_stmt
         self.prev_node_type = None
+        self.create_table_stmt = False
+        self.column_constraints = False
 
     def exitRoot(self, ctx: PostgreSQLParser.RootContext):
         self.formatted_code = self.formatted_code[
