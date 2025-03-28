@@ -15,6 +15,7 @@ ON order_items.order_id=orders.order_id
 GROUP BY
 products.product_name;
 
+
 DELETE  FROM employees   e USING   departments d WHERE e.department_id=d.department_id
 AND d.department_name='marketing';
 
@@ -22,6 +23,8 @@ CREATE  TABLE users (
 id serial PRIMARY KEY,
  name   VARCHAR(100) NOT NULL, email VARCHAR(100) UNIQUE NOT NULL,
 created_at TIMESTAMP DEFAULT now());
+
+
 
 INSERT INTO users (name,email)VALUES
 ('Jan Kowalski','jan.kowalski@example.com'),
