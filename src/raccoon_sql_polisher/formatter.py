@@ -26,6 +26,7 @@ class Formatter(PostgreSQLParserListener):
         self,
         number_of_newlines_after_stmt: int = 2,
         ugly: bool = False,
+        indent_after_keyword: bool = False,
         *args,
         **kwargs,
     ):
@@ -34,6 +35,7 @@ class Formatter(PostgreSQLParserListener):
         self.__number_of_newlines_after_stmt = number_of_newlines_after_stmt
         self.prev_node_type = None
         self.ugly = ugly
+        self.indent_after_keyword = indent_after_keyword
 
     def get_leaf_nodes(self, ctx):
         if ctx.getChildCount() == 0:
@@ -64,23 +66,32 @@ class Formatter(PostgreSQLParserListener):
             PostgreSQLParser.Where_clauseContext,
             PostgreSQLParser.Simple_select_pramaryContext,
             PostgreSQLParser.From_clauseContext,
+            PostgreSQLParser.CreatestmtContext,
+            PostgreSQLParser.Character_cContext,
+            PostgreSQLParser.ColconstraintelemContext,
+            PostgreSQLParser.Character_cContext,
+            PostgreSQLParser.ColconstraintelemContext,
+            PostgreSQLParser.ColconstraintelemContext,
+            PostgreSQLParser.ConstdatetimeContext,
+            PostgreSQLParser.ColconstraintelemContext,
+            PostgreSQLParser.Values_clauseContext,
         ]
         node_parent = node.parentCtx
-        if any(isinstance(node_parent, keyword) for keyword in keywords):
-            node_type = NodeType.KEYWORD
-        elif node.getText().startswith("'") and node.getText().endswith("'"):
-            node_type = NodeType.STRING
-        elif node.getText().lower() in ["avg", "count"]:
-            node_type = NodeType.KEYWORD
-        elif isinstance(node_parent, PostgreSQLParser.Func_applicationContext):
+        if isinstance(node_parent, PostgreSQLParser.Func_applicationContext) or node.getText() in ("(", ")"):
             if node.getText() == "(":
                 node_type = NodeType.LEFT_PARENTHESIS
             else:
                 node_type = NodeType.RIGHT_PARENTHESIS
+        elif node.getText().startswith("'") and node.getText().endswith("'"):
+            node_type = NodeType.STRING
+        elif node.getText().lower() in ["avg", "count"]:
+            node_type = NodeType.KEYWORD
         elif node.getText() == ".":
             node_type = NodeType.DOT
         elif node.getText() == ",":
             node_type = NodeType.COMMA
+        elif any(isinstance(node_parent, keyword) for keyword in keywords):
+            node_type = NodeType.KEYWORD
         return node_type
 
     @staticmethod
@@ -94,10 +105,15 @@ class Formatter(PostgreSQLParserListener):
         node_type = self.determine_node_type(node)
         node_text = node.getText()
         formatted_node_text = node_text
+        if node_text.strip() == '':
+            return ''
+
         if node_type is NodeType.KEYWORD:
-            if self.prev_node_type is None:
+            if node_text.upper() == "VALUES":
+                formatted_node_text = "\n" + node_text.upper() + " "
+            elif self.prev_node_type is None:
                 formatted_node_text = node_text.upper()
-            elif self.prev_node_type is NodeType.REGULAR:
+            elif self.prev_node_type is NodeType.REGULAR or self.prev_node_type is NodeType.STRING:
                 formatted_node_text = "\n" + node_text.upper()
             else:
                 formatted_node_text = " " + node_text.upper()
@@ -113,13 +129,18 @@ class Formatter(PostgreSQLParserListener):
         elif node_type is NodeType.RIGHT_PARENTHESIS:
             formatted_node_text = node_text
         elif node_type is NodeType.STRING:
-            formatted_node_text = " " + node_text
+            if self.prev_node_type is NodeType.LEFT_PARENTHESIS:
+                formatted_node_text = node_text
+            else:
+                formatted_node_text = " " + node_text
         elif node_type is NodeType.REGULAR:
             if (
                 self.prev_node_type is NodeType.DOT
                 or self.prev_node_type is NodeType.LEFT_PARENTHESIS
             ):
                 formatted_node_text = node_text.lower()
+            elif self.indent_after_keyword and self.prev_node_type is NodeType.KEYWORD:
+                formatted_node_text = "\n\t"+ node_text.lower()
             else:
                 formatted_node_text = " " + node_text.lower()
 
