@@ -23,12 +23,14 @@ class NodeType(Enum):
 
 class Formatter(PostgreSQLParserListener):
     def __init__(
-        self,
-        number_of_newlines_after_stmt: int = 2,
-        ugly: bool = False,
-        indent_after_keyword: bool = False,
-        *args,
-        **kwargs,
+            self,
+            number_of_newlines_after_stmt: int = 2,
+            ugly: bool = False,
+            indent_after_keyword: bool = False,
+            newline_after_comma: bool = False,
+            indent: bool = False,
+            *args,
+            **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.formatted_code = ""
@@ -38,6 +40,14 @@ class Formatter(PostgreSQLParserListener):
         self.indent_after_keyword = indent_after_keyword
         self.create_table_stmt = False
         self.column_constraints = False
+        self.newline_after_comma = newline_after_comma
+        self.inside_select_clause = False
+        self.indent = indent
+        self.indent_str = "    "
+        self.indent_level = 0
+        self.new_line = True
+        self.prev_node_text = ""
+        self.inside_values_clause = False
 
     def get_leaf_nodes(self, ctx):
         if ctx.getChildCount() == 0:
@@ -80,7 +90,7 @@ class Formatter(PostgreSQLParserListener):
         ]
         node_parent = node.parentCtx
         if isinstance(
-            node_parent, PostgreSQLParser.Func_applicationContext
+                node_parent, PostgreSQLParser.Func_applicationContext
         ) or node.getText() in ("(", ")"):
             if node.getText() == "(":
                 node_type = NodeType.LEFT_PARENTHESIS
@@ -112,6 +122,16 @@ class Formatter(PostgreSQLParserListener):
         if node_text.strip() == "":
             return ""
 
+        if node_type is NodeType.KEYWORD:
+            if node_text.upper() == "SELECT":
+                self.inside_select_clause = True
+            if node_text.upper() == "VALUES":
+                self.inside_select_clause = False
+                self.inside_values_clause = True
+            elif node_text.upper() in ("FROM", "WHERE", "GROUP", "ORDER", "HAVING", "LIMIT", "OFFSET", "SET"):
+                self.inside_select_clause = False
+                self.inside_values_clause = False
+
         if not self.column_constraints:
             if node_type is NodeType.KEYWORD:
                 if node_text.upper() == "VALUES":
@@ -119,14 +139,17 @@ class Formatter(PostgreSQLParserListener):
                 elif self.prev_node_type is None:
                     formatted_node_text = node_text.upper()
                 elif (
-                    self.prev_node_type is NodeType.REGULAR
-                    or self.prev_node_type is NodeType.STRING
+                        self.prev_node_type is NodeType.REGULAR
+                        or self.prev_node_type is NodeType.STRING
                 ):
                     formatted_node_text = "\n" + node_text.upper()
                 else:
                     formatted_node_text = " " + node_text.upper()
             elif node_type is NodeType.COMMA:
-                formatted_node_text = node_text
+                if self.newline_after_comma and self.inside_select_clause:
+                    formatted_node_text = node_text + "\n"
+                else:
+                    formatted_node_text = node_text + ""
             elif node_type is NodeType.DOT:
                 formatted_node_text = node_text
             elif node_type is NodeType.LEFT_PARENTHESIS:
@@ -146,13 +169,13 @@ class Formatter(PostgreSQLParserListener):
                     formatted_node_text = " " + node_text
             elif node_type is NodeType.REGULAR:
                 if (
-                    self.prev_node_type is NodeType.DOT
-                    or self.prev_node_type is NodeType.LEFT_PARENTHESIS
+                        self.prev_node_type is NodeType.DOT
+                        or self.prev_node_type is NodeType.LEFT_PARENTHESIS
                 ):
                     formatted_node_text = node_text.lower()
                 elif (
-                    self.indent_after_keyword
-                    and self.prev_node_type is NodeType.KEYWORD
+                        self.indent_after_keyword
+                        and self.prev_node_type is NodeType.KEYWORD
                 ):
                     formatted_node_text = "\n\t" + node_text.lower()
                 else:
@@ -178,12 +201,101 @@ class Formatter(PostgreSQLParserListener):
                 formatted_node_text = node_text
             elif node_type is NodeType.STRING:
                 formatted_node_text = " " + node_text
-            elif node_type is NodeType.COMMA:
-                formatted_node_text = node_text
 
         if self.ugly and node_type is not NodeType.STRING:
             formatted_node_text = self.random_case(formatted_node_text)
         self.prev_node_type = node_type
+        if self.indent:
+            upper_node_text = node_text.upper()
+
+            if node_type is NodeType.KEYWORD:
+                if upper_node_text in ("SELECT", "WHERE", "GROUP", "ORDER",
+                                       "HAVING", "LIMIT", "OFFSET", "VALUES",
+                                       "INSERT", "UPDATE", "CREATE", "SET",
+                                       ):
+                    formatted_node_text = "\n" + upper_node_text
+                    self.indent_level = 1
+                    self.new_line = True
+
+                elif upper_node_text == "DELETE":
+                    formatted_node_text = "DELETE"
+                    self.indent_level = 1
+                    self.new_line = False
+
+                elif upper_node_text == "FROM":
+                    if self.prev_node_type is NodeType.KEYWORD and self.prev_node_text.upper() == "DELETE":
+                        formatted_node_text = " FROM"
+                        self.new_line = False
+                    else:
+                        formatted_node_text = "\nFROM"
+                        self.indent_level = 1
+                        self.new_line = True
+
+                elif upper_node_text in ("LEFT", "RIGHT", "INNER", "OUTER"):
+                    formatted_node_text = "\n" + (self.indent_str * self.indent_level) + upper_node_text
+                    self.new_line = False
+
+                elif upper_node_text == "JOIN":
+                    formatted_node_text = " JOIN" if not self.new_line else "\n" + (
+                                self.indent_str * self.indent_level) + "JOIN"
+                    self.indent_level = 1
+                    self.new_line = False
+
+                elif upper_node_text == "ON":
+                    formatted_node_text = " ON"
+                    self.new_line = False
+
+                elif upper_node_text in ("AND", "OR"):
+                    formatted_node_text = "\n" + (self.indent_str * self.indent_level) + upper_node_text
+                    self.new_line = False
+
+            elif node_type is NodeType.COMMA:
+                if self.newline_after_comma and self.inside_select_clause:
+                    if not self.indent:
+                        formatted_node_text = node_text + "\n"
+                    else:
+                        formatted_node_text = node_text
+                    self.new_line = True
+                else:
+                    formatted_node_text = node_text + " "
+                    self.new_line = False
+
+
+            elif node_type is NodeType.LEFT_PARENTHESIS:
+                formatted_node_text = node_text
+                self.indent_level += 1
+                self.new_line = False
+
+            elif node_type is NodeType.RIGHT_PARENTHESIS:
+                formatted_node_text = node_text
+                self.indent_level = max(self.indent_level - 1, 1)
+                self.new_line = False
+
+            elif self.new_line and node_type not in (NodeType.KEYWORD, NodeType.COMMA):
+                formatted_node_text = "\n" + (self.indent_str * self.indent_level) + node_text.strip()
+                self.new_line = False
+            else:
+                if self.prev_node_type is NodeType.DOT or node_type is NodeType.DOT:
+                    formatted_node_text = node_text.strip()
+                else:
+                    formatted_node_text = " " + node_text.strip()
+
+                self.new_line = False
+
+        if self.indent and self.inside_values_clause:
+            if node_text == "(":
+                formatted_node_text = "\n" + (self.indent_str) + node_text
+                self.new_line = False
+            elif node_text == ")":
+                formatted_node_text = node_text
+                self.new_line = False
+            elif node_text == ",":
+                formatted_node_text = node_text + (self.indent_str)
+                self.new_line = False
+
+        self.prev_node_text = node_text
+        self.prev_node_type = node_type
+
         return formatted_node_text
 
     def enterStmt(self, ctx: PostgreSQLParser.StmtContext):
@@ -197,7 +309,7 @@ class Formatter(PostgreSQLParserListener):
         self.formatted_code += ";"
         if self.create_table_stmt:
             self.formatted_code = (
-                self.formatted_code[:-2] + "\n" + self.formatted_code[-2:]
+                    self.formatted_code[:-2] + "\n" + self.formatted_code[-2:]
             )
         self.formatted_code += "\n" * self.__number_of_newlines_after_stmt
         self.prev_node_type = None
@@ -206,8 +318,8 @@ class Formatter(PostgreSQLParserListener):
 
     def exitRoot(self, ctx: PostgreSQLParser.RootContext):
         self.formatted_code = self.formatted_code[
-            : -self.__number_of_newlines_after_stmt + 1
-        ]
+                              : -self.__number_of_newlines_after_stmt + 1
+                              ]
 
     def get_formatted_code(self):
         return self.formatted_code
@@ -234,6 +346,17 @@ def __create_parser():
         ),
         action="store_true",
     )
+    parser.add_argument(
+        "--newline-after-comma",
+        help="Inserts newline after each comma in SELECT clause.",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--indent",
+        help="Indent SQL statements for better readability.",
+        action="store_true",
+    )
+
     return parser
 
 
@@ -250,7 +373,7 @@ def __get_sql_files_to_format(path: str):
         )
 
 
-def format_sql_file(sql_file_path: Path, ugly: bool = False):
+def format_sql_file(sql_file_path: Path, ugly: bool = False, newline_after_comma: bool = False, indent: bool = False):
     with open(sql_file_path, "r") as file:
         file_content = file.read()
     input_stream = InputStream(file_content)
@@ -260,7 +383,7 @@ def format_sql_file(sql_file_path: Path, ugly: bool = False):
 
     tree = parser.root()
 
-    listener = Formatter(ugly=ugly)
+    listener = Formatter(ugly=ugly, newline_after_comma=newline_after_comma, indent=indent)
 
     walker = ParseTreeWalker()
     walker.walk(listener, tree)
@@ -279,4 +402,6 @@ def main():
 
     sql_files = __get_sql_files_to_format(args.path)
     for file in sql_files:
-        format_sql_file(file, args.ugly)
+        format_sql_file(file, args.ugly,
+                        args.newline_after_comma,
+                        indent=args.indent)
