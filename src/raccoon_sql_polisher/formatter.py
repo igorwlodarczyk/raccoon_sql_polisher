@@ -29,6 +29,8 @@ class Formatter(PostgreSQLParserListener):
             indent_after_keyword: bool = False,
             newline_after_comma: bool = False,
             indent: bool = False,
+            max_words_per_line: int = None,
+            terminal_style: str = None,
             *args,
             **kwargs,
     ):
@@ -48,6 +50,10 @@ class Formatter(PostgreSQLParserListener):
         self.new_line = True
         self.prev_node_text = ""
         self.inside_values_clause = False
+        self.max_words_per_line = max_words_per_line
+        self.word_counter = 0
+        self.current_line = ""
+        self.terminal_style = terminal_style
 
     def get_leaf_nodes(self, ctx):
         if ctx.getChildCount() == 0:
@@ -131,6 +137,7 @@ class Formatter(PostgreSQLParserListener):
             elif node_text.upper() in ("FROM", "WHERE", "GROUP", "ORDER", "HAVING", "LIMIT", "OFFSET", "SET"):
                 self.inside_select_clause = False
                 self.inside_values_clause = False
+            self.word_counter=0
 
         if not self.column_constraints:
             if node_type is NodeType.KEYWORD:
@@ -249,6 +256,7 @@ class Formatter(PostgreSQLParserListener):
                     formatted_node_text = "\n" + (self.indent_str * self.indent_level) + upper_node_text
                     self.new_line = False
 
+
             elif node_type is NodeType.COMMA:
                 if self.newline_after_comma and self.inside_select_clause:
                     if not self.indent:
@@ -296,6 +304,35 @@ class Formatter(PostgreSQLParserListener):
         self.prev_node_text = node_text
         self.prev_node_type = node_type
 
+        if self.max_words_per_line:
+            words = node_text.split()
+            for word in words:
+                # print("word_counter 1: ", self.word_counter)
+                if word not in [',', ';', '(', ')', '.']:#pomijalne
+                    # print("word_counter 2: ", self.word_counter, "word: ", word)
+                    if self.word_counter + 1 > self.max_words_per_line:
+                        formatted_node_text += self.current_line.strip() + "\n"
+                        self.current_line = word
+                        self.word_counter = 1
+                    else:
+                        if self.current_line:
+                            self.current_line += " " + word
+                            self.word_counter += 1
+                        else:
+                            self.current_line = word
+                        self.word_counter += 1
+            self.current_line = ""  # Resetowanie linii
+
+        # if self.terminal_style:
+        #     if self.terminal_style not in ["Style.BRIGHT", "Style.DIM", "Style.NORMAL"]:
+        #         raise ValueError(
+        #             f"Invalid terminal_style value. Must be one of Style.BRIGHT, Style.DIM, Style.NORMAL.")
+        #     else:
+        #         print(f"{self.terminal_style}{Fore.LIGHTWHITE_EX}{formatted_node_text}{Style.RESET_ALL}")
+        #
+        #
+        # print("self.terminal_style}{Fore.LIGHTWHITE_EX}{formatted_node_text}{Style.RESET_ALL")
+        # print(f"{self.terminal_style}{Fore.LIGHTWHITE_EX}{formatted_node_text}{Style.RESET_ALL}")
         return formatted_node_text
 
     def enterStmt(self, ctx: PostgreSQLParser.StmtContext):
@@ -357,6 +394,19 @@ def __create_parser():
         action="store_true",
     )
 
+    parser.add_argument(
+        "--max-words-per-line",
+        type=int,
+        help="Maximum number of words per line in the formatted SQL code.",
+        action="store",
+    )
+    parser.add_argument(
+        "--terminal-style",
+        type=str,
+        help="Determines colorama style of the formatted SQL code in terminal. Available options: Style.BRIGHT, Style.DIM, Style.NORMAL",
+        action= "store",
+    )
+
     return parser
 
 
@@ -373,7 +423,7 @@ def __get_sql_files_to_format(path: str):
         )
 
 
-def format_sql_file(sql_file_path: Path, ugly: bool = False, newline_after_comma: bool = False, indent: bool = False):
+def format_sql_file(sql_file_path: Path, ugly: bool = False, newline_after_comma: bool = False, indent: bool = False, max_words_per_line: int = None, terminal_style: str = None):
     with open(sql_file_path, "r") as file:
         file_content = file.read()
     input_stream = InputStream(file_content)
@@ -383,7 +433,7 @@ def format_sql_file(sql_file_path: Path, ugly: bool = False, newline_after_comma
 
     tree = parser.root()
 
-    listener = Formatter(ugly=ugly, newline_after_comma=newline_after_comma, indent=indent)
+    listener = Formatter(ugly=ugly, newline_after_comma=newline_after_comma, indent=indent, max_words_per_line=max_words_per_line, terminal_style=terminal_style)
 
     walker = ParseTreeWalker()
     walker.walk(listener, tree)
@@ -402,6 +452,10 @@ def main():
 
     sql_files = __get_sql_files_to_format(args.path)
     for file in sql_files:
-        format_sql_file(file, args.ugly,
-                        args.newline_after_comma,
-                        indent=args.indent)
+        format_sql_file(file, ugly= args.ugly,
+                        newline_after_comma=args.newline_after_comma,
+                        indent=args.indent,
+                        max_words_per_line=args.max_words_per_line)
+
+if __name__ == "__main__":
+    main()
